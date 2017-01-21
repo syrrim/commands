@@ -1,4 +1,4 @@
-from commands import command, Option as opt
+from commands import command, Arg, flags, BoolEnum
 
 def test_basic():
     @command
@@ -9,10 +9,10 @@ def test_basic():
 
 def test_var_kw():
     @command
-    def switch(*values:str, indent=False, cr=False):
+    def switch(*values:str, indent=False, cr=True):
         return ("\n" + ("\r" if cr else "") + ("    " if indent else "")).join(values)
         
-    assert switch("1", "2", "--indent", "3", "4") == "1\n    2\n    3\n    4"
+    assert switch("1", "2", "--indent", "--no-cr", "3", "4") == "1\n    2\n    3\n    4"
 
 def test_class():
     @command
@@ -32,6 +32,7 @@ def test_class():
 
     assert Main("17", "--clement", "value") == 17
     assert Main("6", "carry", "6") == 6
+    assert Main("6", "--clement", "carry", "6") == 12
 
 def test_kw():
     @command
@@ -39,3 +40,12 @@ def test_kw():
         return args, kwargs
 
     assert tries("--grape", "7", "--pear", "22", "14.4") == ((14.4,), {"grape": 7, "pear": 22})
+
+def test_flags():
+    @command
+    def bin(first: BoolEnum(flags(("fon", "f"), ("foff", "F")).fon) = False, 
+            second: BoolEnum(flags(("son", "s"), ("soff", "S")).son) = False):
+        return (first << 1) + second
+
+    assert bin("-fFs") == 1
+    assert bin("-FS") == 0

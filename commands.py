@@ -1,180 +1,10 @@
 from inspect import signature, Parameter
+import enum
 import sys
 import itertools
+import functools
 import traceback
 import readline
-
-
-class Option:
-    def __init__(self, type: type=None, short: str=None, doc: str=None, typename: str=None):
-        self.type = type
-        self.short = short
-        self.doc = doc
-        self.typename = typename
-
-    @classmethod
-    def from_props(cls, default, anno):
-        if isinstance(anno, cls):
-            inst = anno
-        else:
-            inst = cls()
-
-        if inst.type is None 
-            if isinstance(anno, type):
-                inst.type = anno
-            elif inst.type is None and inst.default not in (Parameter.empty, None):
-                inst.type = type(default)
-
-        if inst.typename is None 
-            if inst.type is not None:
-                inst.typename = inst.type.__name__.upper()
-            else:
-                inst.typename = "VAL"
-
-        return inst
-            
-
-    def argument(self, name):
-
-class BoolOption(Option):
-    def __init__(self, short=None, doc=None):
-        self.short = short
-        self.doc = doc
-
-    def argument(self, name):
-
-
-    
-
-
-class Argument:
-    def __init__(self, name, coerce):
-        self.name = name
-        self.coerce = coerce
-
-    @classmethod
-    def static(cls, val):
-        return lambda it: val
-
-    @classmethod
-    def first(cls, it):
-        return next(it)
-
-    @classmethod
-    def call(cls, f):
-        def w(it):
-            try:
-                val = next(it)
-                return f(val)
-            except:
-                return val
-        return w
-    
-    @classmethod
-    def type_coerce(cls, type_):
-        if type_ == bool:
-            return cls.static(True)
-        elif type_ == list:
-            return cls.call(lambda s: s.split(","))
-        return cls.call(type_) # works for str, int, float, etc.
-        
-    @classmethod
-    def get_type(cls, param):
-        ano = param.annotation
-        if isinstance(ano, Option):
-           if ano.type:
-                return ano.type
-        elif isinstance(ano, type):
-            return ano
-        elif param.default is not Parameter.empty and param.default is not None:
-            return type(param.default)
-
-        
-    @classmethod
-    def create(cls, param):
-        return cls(param.name, cls.get_coerce(param))
-        
-    @classmethod
-    def bool_pairs(cls, param):
-        return cls(param.name, cls.static(True)), cls(param.name, cls.static(False))
-    
-
-class Blank:
-    def __init__(self, name, default, kind, annotation):
-        self.name = name
-        self.default = default
-        self.list = True if kind in (Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD) else False
-        self.kind = kind
-
-        self.type = None
-        self.doc = None
-        self.short = None
-        self.typename = None
-
-        if annotation is not Parameter.empty:
-            if isinstance(annotation, Option):
-                self.type = annotation.type
-                self.doc = annotation.doc
-                self.short = annotation.short
-                self.typename = annotation.typename
-            elif hasattr(annotation, "__call__"): #could be type, but all it needs is to be able to coerce
-                self.type = annotation
-            elif isinstance(annotation, str):
-                self.doc = annotation
-        if self.type is None and self.default != Parameter.empty and self.default is not None:
-            self.type = type(self.default)
-        if self.typename is None and self.type is not None:
-            self.typename = self.type.__name__.upper()
-            
-
-    def coerce(self, string):
-        try:
-            return self.type(string)
-        except Exception: #type might not exist, might not accept strings. 
-            return string
-
-    def coerce_iter(self, it):
-        if self.type == bool:
-            return True
-        return self.coerce(next(it))
-
-    def doc(self):
-        result = ""
-        if self.default is not Parameter.empty:
-            result += "--"
-        result += self.name
-        if self.short is not None:
-            result += ", -" + self.short
-        if self.doc:
-            result += ": " + self.doc
-        elif self.type:
-            result += ": " + str(self.type)
-        return result
-
-    def inline(self):
-        result = ""
-        if self.short:
-            result += "-" + self.short
-        else:
-            result += "--" + self.name 
-        if self.type != bool:
-            result += " "
-            if self.typename is not None:
-                result += self.typename
-            else:
-                result += "VAL"
-        if self.default != Parameter.empty:
-            return "[" + result + "]"
-        return result
-
-    def __str__(self):
-        return self.name + ":" + str(self.type) + "=" + str(self.default)
-
-    def __repr__(self):
-        return "{}('{}', {}, Option(type={}, short={}, doc={}))".format(
-                self.__class__.__name__, self.name, self.default, 
-                                    self.type, self.short, self.doc)
-
 
 def parse_args(args, positional, var_pos, long_flags, short_flags, var_kw, consume=True):
     pos_args = []
@@ -185,7 +15,7 @@ def parse_args(args, positional, var_pos, long_flags, short_flags, var_kw, consu
         if more_kw and isinstance(arg, str):
             if arg in long_flags:
                 f = long_flags[arg]
-                options[f.name] = f.coerce(iter_args)
+                options[f.name] = f(iter_args)
                 continue
 
             if arg == "--":
@@ -194,21 +24,21 @@ def parse_args(args, positional, var_pos, long_flags, short_flags, var_kw, consu
 
             if var_kw is not None and arg.startswith("--"):
                 name = arg[2:].replace("-", "_")
-                options[name] = var_kw.coerce(iter_args)
+                options[name] = var_kw(iter_args)
                 continue
 
             if arg[0] == "-" and len(arg) > 1 and all(c in short_flags for c in arg[1:]):
                 for c in arg[1:]:
                     f = short_flags[c]
-                    options[f.name] = f.coerce(iter_args)
+                    options[f.name] = f(iter_args)
                 continue
 
         if len(positional) > len(pos_args):
-            pos_args.append(positional[len(pos_args)].coerce([arg]))
+            pos_args.append(positional[len(pos_args)](itertools.chain([arg], iter_args)))
             continue
 
         if var_pos is not None:
-            pos_args.append(var_pos.coerce([arg]))
+            pos_args.append(var_pos(itertools.chain([arg], iter_args)))
             continue 
 
         if consume:
@@ -216,8 +46,108 @@ def parse_args(args, positional, var_pos, long_flags, short_flags, var_kw, consu
             raise TypeError("Too many arguments: needed {}, {} given".format(len(positional), len(args)))
         return pos_args, options, itertools.chain([arg], iter_args)
 
-    return pos_args, options, ()
+    return pos_args, options, iter(())
 
+class Coercer:
+    def __init__(self, name, f):
+        self.name = name
+        self.f = f
+
+    def __call__(self, x):
+        return self.f(x)
+
+def coercer(b_f):
+    @functools.wraps(b_f)
+    def w(self, *args):
+        return Coercer(self.name, b_f(self, *args))
+    return w
+
+class Arg:
+    def __init__(self, short=None):
+        self.name = None
+        self.short_str = short
+
+    def baptize(self, name):
+        self.name = name
+
+    @coercer
+    def pos(self):
+        return lambda x: next(x)
+
+    def var(self):
+        return self.pos()
+
+    def long(self, di):
+        di["--"+self.name.replace("_", "-")] = self.pos()
+
+    def short(self, di):
+        if self.short is not None:
+            di[self.short_str] = self.pos()
+
+    def kw(self):
+        return self.pos()
+
+class TypeArg(Arg):
+    def __init__(self, type, short=None):
+        self.type = type
+        Arg.__init__(self, short)
+
+    @coercer
+    def pos(self):
+        return lambda x: self.type(next(x))
+
+class EnumArg(Arg):
+    def __init__(self, type):
+        self.type = type
+
+    def member(self, val):
+        return self.type[val]
+
+    @coercer
+    def pos(self):
+        return lambda x: self.member(next(x))
+
+    def short(self, di):
+        # expects members to point to singles chars. 
+        for member in self.type:
+            di[member.value] = Coercer(self.name, lambda x, name=member.name: self.member(name))
+
+def flags(*pairs):
+    names, shorts = zip(*pairs)
+    return enum.Enum("Enum_"+"_".join(names), pairs)
+
+class BoolEnum(EnumArg):
+    def __init__(self, true):
+        self.true = true
+        EnumArg.__init__(self, type(self.true))
+
+    def member(self, val):
+        return self.type[val] == self.true
+
+
+class BoolArg(Arg):
+    @coercer
+    def pos(self):
+        return lambda x: next(x)[0].lower() in "yt"#yes/true
+
+    def long(self, di):
+        di["--" + self.name.replace("_", "-")] = Coercer(self.name, lambda x: True)
+        di["--no-" + self.name.replace("_", "-")] = Coercer(self.name, lambda x: False)
+
+
+def get_arg(param):
+    if isinstance(param.annotation, Arg):
+        return param.annotation
+    if param.annotation is not Parameter.empty and isinstance(param.annotation, type):
+        return TypeArg(param.annotation)
+    if isinstance(param.default, enum.Enum):
+        return EnumArg(type(param.default))
+    if isinstance(param.default, bool):
+        return BoolArg(param.name)
+    if param.default is not None and param.default is not Parameter.empty:
+        return TypeArg(type(param.default))
+    return Arg()
+           
 
 class Command:
     def __init__(self, func, doc, args):
@@ -239,44 +169,26 @@ class Command:
 
         params = signature(func).parameters
         for param in params:
-            type_ = Argument.get_type(param)
-            arg = Argument.create(param)
+            p = params[param]
+            arg = get_arg(p)
+            arg.baptize(p.name)
             #POSITIONAL_OR_KEYWORD is the default for regular python args
-            if arg.kind in (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD):
-                pos.append(arg)
-            if arg.kind == Parameter.VAR_POSITIONAL:
-                var_pos = arg
-            if arg.kind in (Parameter.KEYWORD_ONLY, Parameter.POSITIONAL_OR_KEYWORD):
-                long_flags["--" + arg.name.replace("_", "-")] = arg
-                if arg.type == bool:
-                    long_flags["--no-" + arg.name.replace("_", "-")] = arg.invert()
-                    
-                if arg.short is not None:
-                    short_flags[arg.short] = arg
-            if arg.kind == Parameter.KEYWORD_ONLY:
-                keyword.append(arg)
-            if arg.kind == Parameter.VAR_KEYWORD:
-                var_kw = arg
+            if p.kind in (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD):
+                pos.append(arg.pos())
+            if p.kind == Parameter.VAR_POSITIONAL:
+                var_pos = arg.var()
+            if p.kind in (Parameter.KEYWORD_ONLY, Parameter.POSITIONAL_OR_KEYWORD):
+                arg.long(long_flags)
+                arg.short(short_flags)
+            if p.kind == Parameter.VAR_KEYWORD:
+                var_kw = arg.kw()
 
         usage = "{name}"
-        for p in pos[0 if hasattr(func, "im_self") else 1:]: #if bound function, skip `self` arg
-            if p.default is not Parameter.empty:
-                usage += " [" + p.name.upper() + "]"
-            else:
-                usage += " " + p.name.upper()
-        if var_pos is not None:
-            usage += " [ " + var_pos.name.upper() + " ...]"
-        for kw in keyword:
-            usage += " " + kw.inline()
-        if var_kw is not None:
-            usage += " [" + var_kw.inline() + " ...]"
-        if func.__doc__ != None:
-            usage += "\n" + func.__doc__ 
-
         def new_func(self, *args):
-            pos_args, options, length = parse_args(args, *self.args)
+            pos_args, options, _ = parse_args(args, *self.args)
+            print(pos_args, options)
             return func(*pos_args, **options)
-            `
+            
         return cls(new_func, usage, (pos, var_pos, long_flags, short_flags, var_kw))
 
     @staticmethod
@@ -319,10 +231,10 @@ class Command:
                 if isinstance(class_.__dict__[attr_name], staticmethod):
                     kind = "static"
                 functions[attr_name].kind = kind
-                if attr_name == "__init__":
-                    for pos in functions[attr_name].args[0]:
-                        if pos.default != Parameter.empty:
-                            raise Exception("Init method shouldn't have optional positional args")
+                #if attr_name == "__init__":
+                #    for pos in functions[attr_name].args[0]:
+                #        if pos.default != Parameter.empty:
+                #            raise Exception("Init method shouldn't have optional positional args")
         def call(self, *args):
             args = iter(args)
             if "__init__" in functions:
